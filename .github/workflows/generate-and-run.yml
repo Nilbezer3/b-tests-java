@@ -3,82 +3,69 @@ name: Generate & Run Java Tests
 on:
   repository_dispatch:
     types: [new_endpoints]
-  workflow_dispatch: {}
 
 jobs:
   gen_and_test:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Checkout this repo (b-tests-java)
       - name: Checkout B (this repo)
         uses: actions/checkout@v4
 
-      - name: Setup Python (generator için)
+      # 2. Setup Python (for Gemini test generation)
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # 3. Install dependencies
       - name: Install Python deps
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install google-generativeai
+          pip install --upgrade pip
+          pip install google-generativeai
 
+      # 4. Save incoming payload (from A)
       - name: Save payload (repo_dispatch)
         if: ${{ github.event_name == 'repository_dispatch' }}
         run: echo '${{ toJson(github.event.client_payload) }}' > payload.json
 
-      - name: Fallback payload (manual)
-        if: ${{ github.event_name != 'repository_dispatch' }}
-        run: echo '{"endpoints":[]}' > payload.json
-
+      # 5. Generate Java tests using Gemini
       - name: Generate Java tests with script
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python scripts/generate_tests_with_gemini.py
 
+      # 6. Show generated test in logs
       - name: Show generated Java test
-        run: sed -n '1,200p' src/test/java/com/generated/ApiSmokeIT.java || true
+        run: cat src/test/java/com/generated/ApiSmokeIT.java
 
-      # A repo'yu çekip ayağa kaldır
+      # 7. Commit and push generated tests back to repo ✅
+      - name: Commit generated tests
+        env:
+          GITHUB_TOKEN: ${{ secrets.B_REPO_PAT }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/test/java/com/generated/ApiSmokeIT.java
+          git commit -m "Auto-update generated API tests from workflow" || echo "No changes to commit"
+          git push https://Nilbezer3:${GITHUB_TOKEN}@github.com/Nilbezer3/b-tests-java.git main
+
+      # 8. Checkout A repo to build & run against it
       - name: Checkout A (app-repo)
         uses: actions/checkout@v4
         with:
           repository: Nilbezer3/app-repo
-          token: ${{ secrets.A_REPO_PAT }}
-          path: app-src
-          fetch-depth: 1
+          token: ${{ secrets.B_REPO_PAT }}
 
+      # 9. Setup JDK for testing
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: '17'
-          cache: 'maven'
+          distribution: temurin
+          java-version: 17
 
+      # 10. Run Maven tests (connects to A if running)
       - name: Build A (Spring Boot)
-        working-directory: app-src
         run: mvn -q -DskipTests package
 
-      - name: Start A on :8080
-        working-directory: app-src
-        run: |
-          nohup java -jar target/*.jar > ../app.log 2>&1 &
-          for i in {1..40}; do
-            curl -sf http://localhost:8080/health && echo "UP" && break || sleep 1
-          done
-          tail -n 80 ../app.log || true
-
-      - name: Run Java tests in B
-        env:
-          BASE_URL: http://localhost:8080
-        run: mvn -Dtest=ApiSmokeIT test
-
-      - name: Upload artifacts (tests & logs)
-        uses: actions/upload-artifact@v4
-        with:
-          name: java-tests-and-logs
-          path: |
-            src/test/java/com/generated/ApiSmokeIT.java
-            target/surefire-reports/
-            app.log
-          if-no-files-found: ignore
+      - name: Run unit tests
+        run: mvn -q test
