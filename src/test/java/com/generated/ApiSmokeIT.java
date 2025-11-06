@@ -8,31 +8,38 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.stream.Stream;
 
+import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.anyOf;
 import static org.hamcrest.Matchers.is;
 
 public class ApiSmokeIT {
 
-    private static final String BASE_URL = System.getenv("BASE_URL") != null ? System.getenv("BASE_URL") : "http://localhost:8080";
+    private static final String BASE_URL = System.getenv().getOrDefault("BASE_URL", "http://localhost:8080");
 
     @BeforeAll
     static void setup() {
         RestAssured.baseURI = BASE_URL;
     }
 
-    static Stream<Arguments> apiEndpoints() {
+    static Stream<Arguments> endpointProvider() {
         return Stream.of(
-            Arguments.of("GET", "/health")
+            Arguments.of("GET", "/ping"),
+            Arguments.of("GET", "/health"),
+            Arguments.of("GET", "/greet/World"),
+            Arguments.of("GET", "/time"),
+            Arguments.of("GET", "/echo"),
+            Arguments.of("GET", "/version")
         );
     }
 
-    @ParameterizedTest(name = "{0} {1}")
-    @MethodSource("apiEndpoints")
-    void verifyApiEndpointStatus(String method, String path) {
-        RestAssured.given()
-            .when()
+    @ParameterizedTest
+    @MethodSource("endpointProvider")
+    void verifyEndpointStatus(String method, String path) {
+        given()
+        .when()
             .request(method, path)
-            .then()
+        .then()
+            .assertThat()
             .statusCode(anyOf(is(200), is(201), is(400), is(401), is(403), is(404), is(405), is(422)));
     }
 }
