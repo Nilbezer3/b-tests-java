@@ -3,42 +3,50 @@ name: Generate & Run Java Tests
 on:
   repository_dispatch:
     types: [new_endpoints]
+  workflow_dispatch: {}
 
 jobs:
   gen_and_test:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout this repo (b-tests-java)
+      # 1️⃣ Checkout this repo (b-tests-java)
       - name: Checkout B (this repo)
         uses: actions/checkout@v4
 
-      # 2. Setup Python (for Gemini test generation)
+      # 2️⃣ Setup Python for generator
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # 3. Install dependencies
+      # 3️⃣ Install Python dependencies
       - name: Install Python deps
         run: |
-          pip install --upgrade pip
-          pip install google-generativeai
+          python -m pip install --upgrade pip
+          python -m pip install google-generativeai
 
-      # 4. Save incoming payload (from A)
+      # 4️⃣ Save payload from A (if repo_dispatch)
       - name: Save payload (repo_dispatch)
         if: ${{ github.event_name == 'repository_dispatch' }}
         run: echo '${{ toJson(github.event.client_payload) }}' > payload.json
 
-      # 5. Generate Java tests using Gemini
+      # 5️⃣ Fallback payload for manual runs
+      - name: Fallback payload (manual)
+        if: ${{ github.event_name != 'repository_dispatch' }}
+        run: echo '{"endpoints":[]}' > payload.json
+
+      # 6️⃣ Generate Java tests with Gemini
       - name: Generate Java tests with script
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python scripts/generate_tests_with_gemini.py
 
-      # 6. Show generated test in logs
+      # 7️⃣ Show generated Java test in logs
       - name: Show generated Java test
-        run: cat src/test/java/com/generated/ApiSmokeIT.java
+        run: sed -n '1,200p' src/test/java/com/generated/ApiSmokeIT.java || true
 
-      # 7. Commit and push generated tests back to repo ✅
+      # 8️⃣ Commit and push generated tests back to GitHub ✅
       - name: Commit generated tests
         env:
           GITHUB_TOKEN: ${{ secrets.B_REPO_PAT }}
@@ -49,23 +57,51 @@ jobs:
           git commit -m "Auto-update generated API tests from workflow" || echo "No changes to commit"
           git push https://Nilbezer3:${GITHUB_TOKEN}@github.com/Nilbezer3/b-tests-java.git main
 
-      # 8. Checkout A repo to build & run against it
+      # 9️⃣ Checkout A repo (app-repo)
       - name: Checkout A (app-repo)
         uses: actions/checkout@v4
         with:
           repository: Nilbezer3/app-repo
-          token: ${{ secrets.B_REPO_PAT }}
+          token: ${{ secrets.A_REPO_PAT }}
+          path: app-src
+          fetch-depth: 1
 
-      # 9. Setup JDK for testing
+      # 🔟 Setup Java 17
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
+          cache: maven
 
-      # 10. Run Maven tests (connects to A if running)
+      # 11️⃣ Build A (Spring Boot)
       - name: Build A (Spring Boot)
+        working-directory: app-src
         run: mvn -q -DskipTests package
 
-      - name: Run unit tests
-        run: mvn -q test
+      # 12️⃣ Start A on port 8080 and wait until UP
+      - name: Start A on :8080
+        working-directory: app-src
+        run: |
+          nohup java -jar target/*.jar > ../app.log 2>&1 &
+          for i in {1..40}; do
+            curl -sf http://localhost:8080/health && echo "UP" && break || sleep 1
+          done
+          tail -n 80 ../app.log || true
+
+      # 13️⃣ Run generated Java tests in B
+      - name: Run Java tests in B
+        env:
+          BASE_URL: http://localhost:8080
+        run: mvn -Dtest=ApiSmokeIT test
+
+      # 14️⃣ Upload logs and test results as artifacts
+      - name: Upload artifacts (tests & logs)
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-tests-and-logs
+          path: |
+            src/test/java/com/generated/ApiSmokeIT.java
+            target/surefire-reports/
+            app.log
+          if-no-files-found: ignore
