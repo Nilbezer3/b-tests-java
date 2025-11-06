@@ -48,14 +48,25 @@ jobs:
 
       # 8️⃣ Commit and push generated tests back to GitHub ✅
       - name: Commit generated tests
+        if: ${{ github.event_name == 'repository_dispatch' }}
         env:
-          GITHUB_TOKEN: ${{ secrets.B_REPO_PAT }}
+          GH_PAT: ${{ secrets.B_REPO_PAT }}
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+  
           git add src/test/java/com/generated/ApiSmokeIT.java
-          git commit -m "Auto-update generated API tests from workflow" || echo "No changes to commit"
-          git push https://Nilbezer3:${GITHUB_TOKEN}@github.com/Nilbezer3/b-tests-java.git main
+  
+          # Değişiklik yoksa commit etme
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+  
+          git commit -m "Auto-update generated API tests from workflow"
+  
+          # *** ÖNEMLİ KISIM: PAT'i URL'de kullanıyoruz ***
+          git push https://x-access-token:${GH_PAT}@github.com/Nilbezer3/b-tests-java.git HEAD:main
 
       # 9️⃣ Checkout A repo (app-repo)
       - name: Checkout A (app-repo)
