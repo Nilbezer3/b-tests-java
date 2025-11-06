@@ -1,79 +1,58 @@
 import os, json, pathlib, re, sys
-from typing import List, Tuple
 
-# ---- Load endpoints from payload ----
+# ---- payload.json'dan endpointleri yükle ----
 payload = json.loads(open("payload.json").read())
-raw_endpoints = payload.get("endpoints", [])
+raw = payload.get("endpoints", [])
 
-# Normalize (method, path)
-pairs: List[Tuple[str, str]] = []
-for e in raw_endpoints:
+pairs = []
+for e in raw:
     m = e.get("method", "GET").upper()
     p = e.get("path", "/health")
-    # path param örnekleri için basit örnek değer
+    # path param -> basit sabit değer
     p = re.sub(r"\{[^/}]+\}", "World", p)  # /greet/{name} -> /greet/World
+    if m == "POST" and p.startswith("/sum") and "?" not in p:
+        p = p + "?a=1&b=2"
     pairs.append((m, p))
 
-# default /health
 if not pairs:
     pairs = [("GET", "/health")]
 
-# Küçük heuristik: POST /sum için query param ekle
-fixed = []
-for (m, p) in pairs:
-    if m == "POST" and p.startswith("/sum") and "?" not in p:
-        fixed.append((m, p + "?a=1&b=2"))
-    else:
-        fixed.append((m, p))
-pairs = fixed
+# ---- Şimdilik direkt Java kodu üret (Gemini opsiyonel) ----
+code = f"""// generated (fallback or Gemini)
+package com.generated;
 
-# ---- Try Gemini ----
-resp_text = ""
-api_key = os.getenv("GEMINI_API_KEY", "")
-if api_key:
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
+import static io.restassured.RestAssured.given;
+import static org.hamcrest.Matchers.anyOf;
+import static org.hamcrest.Matchers.is;
 
-        # Güncel, çalışır model isimlerinden biri
-        model = genai.GenerativeModel("models/gemini-2.5-flash")
-        prompt = f"""
-You are a senior backend QA engineer.
+import java.util.stream.Stream;
 
-Generate ONE pytest file that calls a running API using requests.
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.Arguments;
 
-- Read BASE_URL from env (default http://localhost:8080)
-- Parametrize over (method, path)
-- Keep assertion as: status_code in (200,201,400,401,403,404,405,422)
-- Use a single test function.
-- Return ONLY Python code (no fences).
+public class ApiSmokeIT {{
 
-Endpoints:
-{chr(10).join([f"- {m} {p}" for m,p in pairs])}
-"""
-        resp = model.generate_content(prompt)
-        resp_text = (getattr(resp, "text", "") or "").strip()
-        # code fence temizliği
-        resp_text = re.sub(r"^```(?:python)?\s*", "", resp_text)
-        resp_text = re.sub(r"\s*```$", "", resp_text)
-    except Exception as e:
-        print(f"[Gemini] failed: {e}", file=sys.stderr)
+    static Stream<Arguments> cases() {{
+        return Stream.of(
+            {",\n            ".join([f"Arguments.of(\\"{m}\\", \\"{p}\\")" for m,p in pairs])}
+        );
+    }}
 
-# ---- Fallback (robust, parametrize) ----
-if not resp_text:
-    resp_text = f"""# generated (fallback)
-import os, requests, pytest
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8080")
-
-@pytest.mark.parametrize("method,path", {pairs})
-def test_smoke(method, path):
-    url = BASE_URL + path
-    r = requests.request(method, url, timeout=10)
-    assert r.status_code in (200,201,400,401,403,404,405,422), f"{{method}} {{url}} -> {{r.status_code}} body={{r.text[:200]}}"
+    @ParameterizedTest
+    @MethodSource("cases")
+    void smoke(String method, String path) {{
+        String base = System.getenv().getOrDefault("BASE_URL", "http://localhost:8080");
+        given()
+        .when()
+            .request(method, base + path)
+        .then()
+            .statusCode(anyOf(is(200), is(201), is(400), is(401), is(403), is(404), is(405), is(422)));
+    }}
+}}
 """
 
-# ---- Write test file ----
-outdir = pathlib.Path("tests/generated")
-outdir.mkdir(parents=True, exist_ok=True)
-(outdir / "test_generated_endpoints.py").write_text(resp_text, encoding="utf-8")
-print("written tests/generated/test_generated_endpoints.py")
+out = pathlib.Path("src/test/java/com/generated")
+out.mkdir(parents=True, exist_ok=True)
+(out / "ApiSmokeIT.java").write_text(code, encoding="utf-8")
+print("Wrote src/test/java/com/generated/ApiSmokeIT.java")
