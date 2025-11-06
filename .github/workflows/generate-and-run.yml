@@ -1,11 +1,8 @@
-name: Generate & Run AI Tests
+name: Generate & Run Java Tests
 
 on:
-  # A repo'su bu event ile B'yi tetikleyecek
   repository_dispatch:
     types: [new_endpoints]
-
-  # Manuel deneme için
   workflow_dispatch: {}
 
 jobs:
@@ -16,38 +13,32 @@ jobs:
       - name: Checkout B (this repo)
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Setup Python (generator için)
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install Python deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install google-generativeai pytest requests
+        run: python -m pip install --upgrade pip google-generativeai
 
-      # repository_dispatch geldiyse payload'ı kaydet
-      - name: Save payload from repository_dispatch (if any)
+      - name: Save payload (repo_dispatch)
         if: ${{ github.event_name == 'repository_dispatch' }}
         run: echo '${{ toJson(github.event.client_payload) }}' > payload.json
 
-      # Manuel çalıştırmada fallback payload (boş -> /health)
-      - name: Create fallback payload (manual runs)
+      - name: Fallback payload (manual)
         if: ${{ github.event_name != 'repository_dispatch' }}
-        run: |
-          echo '{"endpoints":[]}' > payload.json
-          cat payload.json
+        run: echo '{"endpoints":[]}' > payload.json
 
-      - name: Generate tests with Gemini
+      - name: Generate Java tests with script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          python scripts/generate_tests_with_gemini.py
-          echo "===== generated test ====="
-          sed -n '1,200p' tests/generated/test_generated_endpoints.py || true
+        run: python scripts/generate_tests_with_gemini.py
 
-      # A repo'sunu PAT ile klonla
-      - name: Checkout A repo (app-repo)
+      - name: Show generated Java test
+        run: sed -n '1,200p' src/test/java/com/generated/ApiSmokeIT.java || true
+
+      # A repo'yu çekip ayağa kaldır
+      - name: Checkout A (app-repo)
         uses: actions/checkout@v4
         with:
           repository: Nilbezer3/app-repo
@@ -55,7 +46,6 @@ jobs:
           path: app-src
           fetch-depth: 1
 
-      # JDK & Maven
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
@@ -67,27 +57,26 @@ jobs:
         working-directory: app-src
         run: mvn -q -DskipTests package
 
-      - name: Start A (Spring Boot) on :8080
+      - name: Start A on :8080
         working-directory: app-src
         run: |
           nohup java -jar target/*.jar > ../app.log 2>&1 &
           for i in {1..40}; do
             curl -sf http://localhost:8080/health && echo "UP" && break || sleep 1
           done
-          echo "---- recent app log ----"
           tail -n 80 ../app.log || true
 
-      - name: Run pytest against A
+      - name: Run Java tests in B
         env:
           BASE_URL: http://localhost:8080
-        run: pytest -q || true
+        run: mvn -q -Dtest=ApiSmokeIT test || true
 
       - name: Upload artifacts (tests & logs)
         uses: actions/upload-artifact@v4
         with:
-          name: ai-generated-tests-and-logs
+          name: java-tests-and-logs
           path: |
-            tests/generated/
+            src/test/java/com/generated/ApiSmokeIT.java
+            target/surefire-reports/
             app.log
-            .pytest_cache/**/*
           if-no-files-found: ignore
