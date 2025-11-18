@@ -1,124 +1,99 @@
-import os
-import json
-import pathlib
-import re
-import sys
+import os, json, pathlib, re, sys
 
 # payload.json'dan endpointleri oku 
-try:
-    payload = json.loads(open("payload.json").read())
-except FileNotFoundError:
-    raise RuntimeError("payload.json bulunamadı. Workflow'da veya lokal testte önce payload.json oluşturulmalı.")
+# A repo'sundan gelen client_payload burada duruyor
+with open("payload.json", encoding="utf-8") as f:
+    payload = json.load(f)
 
 raw = payload.get("endpoints", [])
 
+# raw = [{ "method": "GET", "path": "/ping" }, ...]
 pairs = []
 for e in raw:
-    m = e.get("method", "GET").upper().strip()
-    p = e.get("path", "/health").strip()
+    m = (e.get("method") or "GET").upper()
+    p = e.get("path") or "/health"
 
-    # Path param'ları dummy değere çevir:  /users/{id} -> /users/1
+    # Eğer hâlâ path param kalmışsa ("/greet/{name}" gibi) kaba bir default ver
+    # A tarafındaki extract_endpoints genelde zaten /greet/1, /echo?msg=... olarak yolluyor.
     p = re.sub(r"\{[^/}]+\}", "1", p)
-
-    # Bazı endpoint'ler için pratik örnek query param'ları ekleyelim
-    # (bunlar tamamen sistemin düzgün 2xx dönmesi için "fixture" gibi)
-    if m == "GET" and p == "/echo":
-        # echo için msg gerekiyor, yoksa 400
-        p = "/echo?msg=hello-from-tests"
-
-    if m == "POST" and p == "/sum":
-        # sum için a,b gerekiyor, yoksa 400
-        p = "/sum?a=1&b=2"
 
     pairs.append((m, p))
 
-# Hiç endpoint yoksa en azından /health test edilsin
+# Hiç endpoint yoksa, bari /health'i test et
 if not pairs:
     pairs = [("GET", "/health")]
 
-# Gemini API key kontrol 
+# Gemini API key kontrolü 
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
     raise RuntimeError("GEMINI_API_KEY tanımlı değil; AI ile test üretemiyorum.")
 
-# Gemini'ye verilecek endpoint listesi 
-endpoints_block = "\n".join([f"- {m} {p}" for (m, p) in pairs])
-
-# Gemini'den Java test kodu iste
+# Gemini'ye prompt gönder
 try:
     import google.generativeai as genai
-except ImportError:
-    raise RuntimeError("google-generativeai paketi yüklü değil. 'pip install google-generativeai' gerekir.")
 
-genai.configure(api_key=api_key)
+    genai.configure(api_key=api_key)
 
-prompt = f"""
+    endpoints_block = "\n".join(f"- {m} {p}" for (m, p) in pairs)
+
+    prompt = f"""
 You are a senior backend QA engineer.
 
 Generate ONE Java test file that calls a running Spring Boot API using RestAssured and JUnit 5.
 
-**VERY IMPORTANT REQUIREMENTS:**
+Requirements:
+- Package MUST be: com.generated
+- Class MUST be: ApiSmokeIT
+- Use JUnit 5 parameterized test with @ParameterizedTest and @MethodSource.
+- Use io.restassured.http.Method enum for HTTP methods.
+- The method source should return Stream<Arguments> where each Arguments.of has (Method, String path).
+- In the test method, call: RestAssured.given().request(method, path)
+- Read BASE_URL from environment variable BASE_URL (default http://localhost:8080 if not set).
+- Status assertion: statusCode(anyOf(is(200), is(201), is(400), is(401), is(403), is(404), is(405), is(422))).
+- Import these classes:
+  - io.restassured.RestAssured
+  - io.restassured.http.Method
+  - org.junit.jupiter.api.BeforeAll
+  - org.junit.jupiter.params.ParameterizedTest
+  - org.junit.jupiter.params.provider.Arguments
+  - org.junit.jupiter.params.provider.MethodSource
+  - java.util.stream.Stream
+  - static org.hamcrest.Matchers.anyOf
+  - static org.hamcrest.Matchers.is
+- Return ONLY Java code. No explanations, no markdown, no comments.
 
-- Package MUST be exactly: com.generated
-- Class name MUST be exactly: ApiSmokeIT
-
-- Use JUnit 5 parameterized test:
-  - Use @ParameterizedTest and @MethodSource.
-  - The method source MUST be named apiEndpoints and return Stream<Arguments>.
-  - Each Arguments must contain: (String method, String path).
-
-- Use RestAssured to send HTTP requests:
-  - In @BeforeAll, read BASE_URL from environment variable "BASE_URL".
-  - If BASE_URL is not set or empty, default to "http://localhost:8080".
-  - Set RestAssured.baseURI accordingly.
-
-- In the parameterized test:
-  - Signature MUST be: void smokeTestApi(String method, String path)
-  - Call the endpoint with:
-      Response response = RestAssured
-          .given()
-          .when()
-          .request(method, path);
-  - Then extract the status code and assert that it is in
-      (200, 201, 204, 400, 401, 403, 404, 405, 422)
-    using Hamcrest matchers:
-      import static org.hamcrest.Matchers.anyOf;
-      import static org.hamcrest.Matchers.is;
-
-- Use imports:
-  - import io.restassured.RestAssured;
-  - import io.restassured.response.Response;
-  - import org.junit.jupiter.api.BeforeAll;
-  - import org.junit.jupiter.params.ParameterizedTest;
-  - import org.junit.jupiter.params.provider.Arguments;
-  - import org.junit.jupiter.params.provider.MethodSource;
-  - import java.util.stream.Stream;
-
-- DO NOT include comments or explanations.
-- DO NOT use code fences.
-- Only output valid Java code for the single file.
-
-Endpoints to cover (method and path, including query params where present):
+Endpoints to cover:
 {endpoints_block}
 """
 
-print("=== Prompt to Gemini ===", file=sys.stderr)
-print(endpoints_block, file=sys.stderr)
+    print("=== Prompt to Gemini ===")
+    print(endpoints_block)
 
-model = genai.GenerativeModel("models/gemini-2.5-flash")
-resp = model.generate_content(prompt)
-text = (getattr(resp, "text", "") or "").strip()
+    model = genai.GenerativeModel("models/gemini-2.5-flash")
+    resp = model.generate_content(prompt)
+    text = (getattr(resp, "text", "") or "").strip()
 
+    # ```java ... ``` gibi code fence'leri temizle
+    text = re.sub(r"^```(?:java)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
 
-text = re.sub(r"^```(?:java)?\s*", "", text)
-text = re.sub(r"\s*```$", "", text)
+    if not text or "class ApiSmokeIT" not in text:
+        raise RuntimeError("Gemini response boş veya 'class ApiSmokeIT' içermiyor.")
 
-if not text or "class ApiSmokeIT" not in text:
-    raise RuntimeError("[Gemini] response boş veya 'class ApiSmokeIT' içermiyor; test üretimi başarısız.")
+    java_code = text
 
-# Java dosyasını yaz 
+# quota, rate limit gibi hataları yakalıyor
+except Exception as e:
+    print("\nGEMINI TEST GENERATION FAILED", file=sys.stderr)
+    print(f"[HATA]: {e}", file=sys.stderr)
+    print("➡ Muhtemel sebep: free quota veya rate limit aşıldı.", file=sys.stderr)
+    print("➡ Çözüm: Biraz bekleyip workflow'u yeniden çalıştır.", file=sys.stderr)
+    print("➡ Not: Mevcut src/test/java/com/generated/ApiSmokeIT.java dosyası DEĞİŞMEDİ.", file=sys.stderr)
+    sys.exit(1)
+
+#  Başarılıysa Java dosyasını yaz 
 outdir = pathlib.Path("src/test/java/com/generated")
 outdir.mkdir(parents=True, exist_ok=True)
 outfile = outdir / "ApiSmokeIT.java"
-outfile.write_text(text, encoding="utf-8")
+outfile.write_text(java_code, encoding="utf-8")
 print(f"Wrote {outfile}")
