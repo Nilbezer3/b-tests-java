@@ -4,7 +4,7 @@ import pathlib
 import re
 import sys
 
-# ---------- 1) payload.json'dan endpointleri oku ----------
+# payload.json'dan endpointleri oku 
 try:
     payload = json.loads(open("payload.json").read())
 except FileNotFoundError:
@@ -36,15 +36,15 @@ for e in raw:
 if not pairs:
     pairs = [("GET", "/health")]
 
-# ---------- 2) Gemini API key kontrol ----------
+# Gemini API key kontrol 
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
     raise RuntimeError("GEMINI_API_KEY tanımlı değil; AI ile test üretemiyorum.")
 
-# ---------- 3) Gemini'ye verilecek endpoint listesi (debug için de güzel) ----------
+# Gemini'ye verilecek endpoint listesi 
 endpoints_block = "\n".join([f"- {m} {p}" for (m, p) in pairs])
 
-# ---------- 4) Gemini'den Java test kodu iste ----------
+# Gemini'den Java test kodu iste
 try:
     import google.generativeai as genai
 except ImportError:
@@ -109,14 +109,14 @@ model = genai.GenerativeModel("models/gemini-2.5-flash")
 resp = model.generate_content(prompt)
 text = (getattr(resp, "text", "") or "").strip()
 
-# code fence temizliği (çok nadiren gerek)
+
 text = re.sub(r"^```(?:java)?\s*", "", text)
 text = re.sub(r"\s*```$", "", text)
 
 if not text or "class ApiSmokeIT" not in text:
     raise RuntimeError("[Gemini] response boş veya 'class ApiSmokeIT' içermiyor; test üretimi başarısız.")
 
-# ---------- 5) Java dosyasını yaz ----------
+# Java dosyasını yaz 
 outdir = pathlib.Path("src/test/java/com/generated")
 outdir.mkdir(parents=True, exist_ok=True)
 outfile = outdir / "ApiSmokeIT.java"
