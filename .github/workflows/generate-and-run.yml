@@ -10,65 +10,43 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout this repo (b-tests-java)
+      # Checkout this repo (b-tests-java)
       - name: Checkout B (this repo)
         uses: actions/checkout@v4
 
-      # 2️⃣ Setup Python for generator
+      # Setup Python for generator
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # 3️⃣ Install Python dependencies
+      # Install Python dependencies
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
           python -m pip install google-generativeai
 
-      # 4️⃣ Save payload from A (if repo_dispatch)
+      # Save payload from A (if repo_dispatch)
       - name: Save payload (repo_dispatch)
         if: ${{ github.event_name == 'repository_dispatch' }}
         run: echo '${{ toJson(github.event.client_payload) }}' > payload.json
 
-      # 5️⃣ Fallback payload for manual runs
+      # Fallback payload for manual runs
       - name: Fallback payload (manual)
         if: ${{ github.event_name != 'repository_dispatch' }}
         run: echo '{"endpoints":[]}' > payload.json
 
-      # 6️⃣ Generate Java tests with Gemini
+      # Generate Java tests with Gemini
       - name: Generate Java tests with script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python scripts/generate_tests_with_gemini.py
 
-      # 7️⃣ Show generated Java test in logs
+      # Show generated Java test in logs
       - name: Show generated Java test
         run: sed -n '1,200p' src/test/java/com/generated/ApiSmokeIT.java || true
 
-      # 8️⃣ Commit and push generated tests back to GitHub ✅
-      - name: Commit generated tests
-        if: ${{ github.event_name == 'repository_dispatch' }}
-        env:
-          GH_PAT: ${{ secrets.B_REPO_PAT }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-  
-          git add src/test/java/com/generated/ApiSmokeIT.java
-  
-          # Değişiklik yoksa commit etme
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-            exit 0
-          fi
-  
-          git commit -m "Auto-update generated API tests from workflow"
-  
-          # *** ÖNEMLİ KISIM: PAT'i URL'de kullanıyoruz ***
-          git push https://x-access-token:${GH_PAT}@github.com/Nilbezer3/b-tests-java.git HEAD:main
-
-      # 9️⃣ Checkout A repo (app-repo)
+      # Checkout A repo (app-repo)
       - name: Checkout A (app-repo)
         uses: actions/checkout@v4
         with:
@@ -77,7 +55,7 @@ jobs:
           path: app-src
           fetch-depth: 1
 
-      # 🔟 Setup Java 17
+      # Setup Java 17
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
@@ -85,12 +63,12 @@ jobs:
           java-version: 17
           cache: maven
 
-      # 11️⃣ Build A (Spring Boot)
+      # Build A (Spring Boot)
       - name: Build A (Spring Boot)
         working-directory: app-src
         run: mvn -q -DskipTests package
 
-      # 12️⃣ Start A on port 8080 and wait until UP
+      # Start A on port 8080 and wait until UP
       - name: Start A on :8080
         working-directory: app-src
         run: |
@@ -100,13 +78,45 @@ jobs:
           done
           tail -n 80 ../app.log || true
 
-      # 13️⃣ Run generated Java tests in B
+      #  Run generated Java tests in B
       - name: Run Java tests in B
         env:
           BASE_URL: http://localhost:8080
         run: mvn -Dtest=ApiSmokeIT test
 
-      # 14️⃣ Upload logs and test results as artifacts
+      # Create human-readable test summary (repo içine kaydet)
+      - name: Create human-readable test summary
+        run: |
+          mkdir -p last-run
+          echo "Last test run summary (ApiSmokeIT):" > last-run/summary.txt
+          echo "" >> last-run/summary.txt
+          if [ -f target/surefire-reports/com.generated.ApiSmokeIT.txt ]; then
+            cat target/surefire-reports/com.generated.ApiSmokeIT.txt >> last-run/summary.txt
+          else
+            echo "Surefire text report not found." >> last-run/summary.txt
+          fi
+
+      # Commit and push generated tests + summary back to GitHub ✅
+      - name: Commit generated tests and summary
+        if: ${{ github.event_name == 'repository_dispatch' }}
+        env:
+          GH_PAT: ${{ secrets.B_REPO_PAT }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add src/test/java/com/generated/ApiSmokeIT.java last-run/summary.txt
+
+          # Değişiklik yoksa commit etme
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "Auto-update generated API tests and summary"
+          git push https://x-access-token:${GH_PAT}@github.com/Nilbezer3/b-tests-java.git HEAD:main
+
+      # Upload logs and test results as artifacts
       - name: Upload artifacts (tests & logs)
         uses: actions/upload-artifact@v4
         with:
@@ -115,4 +125,5 @@ jobs:
             src/test/java/com/generated/ApiSmokeIT.java
             target/surefire-reports/
             app.log
+            last-run/summary.txt
           if-no-files-found: ignore
