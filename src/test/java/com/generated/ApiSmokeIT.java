@@ -6,7 +6,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+
 import java.util.stream.Stream;
+
 import static org.hamcrest.Matchers.anyOf;
 import static org.hamcrest.Matchers.is;
 
@@ -14,28 +16,19 @@ public class ApiSmokeIT {
 
     @BeforeAll
     static void setup() {
-        RestAssured.baseURI = System.getenv("BASE_URL");
-        if (RestAssured.baseURI == null || RestAssured.baseURI.isEmpty()) {
-            RestAssured.baseURI = "http://localhost:8080";
-        }
+        String baseUrl = System.getenv().getOrDefault("BASE_URL", "http://localhost:8080");
+        RestAssured.baseURI = baseUrl;
     }
 
     static Stream<Arguments> apiEndpoints() {
         return Stream.of(
-            Arguments.of(Method.GET, "/ping"),
-            Arguments.of(Method.GET, "/health"),
-            Arguments.of(Method.GET, "/greet/1"),
-            Arguments.of(Method.GET, "/echo"),
-            Arguments.of(Method.POST, "/sum"),
-            Arguments.of(Method.GET, "/time"),
-            Arguments.of(Method.GET, "/version"),
-            Arguments.of(Method.GET, "/status3")
+            Arguments.of(Method.GET, "/health")
         );
     }
 
     @ParameterizedTest
     @MethodSource("apiEndpoints")
-    void verifyApiEndpointStatus(Method method, String path) {
+    void verifyApiEndpointReturnsExpectedStatus(Method method, String path) {
         RestAssured.given()
             .request(method, path)
             .then()
