@@ -16,22 +16,25 @@ public class ApiSmokeIT {
 
     @BeforeAll
     static void setup() {
-        String baseUrl = System.getenv().getOrDefault("BASE_URL", "http://localhost:8080");
+        String baseUrl = System.getenv("BASE_URL");
+        if (baseUrl == null || baseUrl.isEmpty()) {
+            baseUrl = "http://localhost:8080";
+        }
         RestAssured.baseURI = baseUrl;
     }
 
     static Stream<Arguments> apiEndpoints() {
         return Stream.of(
-            Arguments.of(Method.GET, "/health")
+                Arguments.of(Method.GET, "/health")
         );
     }
 
     @ParameterizedTest
     @MethodSource("apiEndpoints")
-    void verifyApiEndpointReturnsExpectedStatus(Method method, String path) {
+    void smokeTestApiEndpoints(Method method, String path) {
         RestAssured.given()
-            .request(method, path)
-            .then()
-            .statusCode(anyOf(is(200), is(201), is(400), is(401), is(403), is(404), is(405), is(422)));
+                .request(method, path)
+                .then()
+                .statusCode(anyOf(is(200), is(201), is(400), is(401), is(403), is(404), is(405), is(422)));
     }
 }
