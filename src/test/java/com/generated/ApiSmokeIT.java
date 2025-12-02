@@ -6,7 +6,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+
 import java.util.stream.Stream;
+
 import static org.hamcrest.Matchers.anyOf;
 import static org.hamcrest.Matchers.is;
 
@@ -27,10 +29,11 @@ public class ApiSmokeIT {
         );
     }
 
-    @ParameterizedTest(name = "{0} {1}")
+    @ParameterizedTest
     @MethodSource("apiEndpoints")
-    void smokeTestApiEndpoints(Method method, String path) {
+    void smokeTestEndpoints(Method method, String path) {
         RestAssured.given()
+            .when()
             .request(method, path)
             .then()
             .statusCode(anyOf(is(200), is(201), is(400), is(401), is(403), is(404), is(405), is(422)));
